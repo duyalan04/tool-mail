@@ -1,7 +1,32 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import type { SheetRow } from '../hooks/useSheet';
+
+declare global {
+  interface Window {
+    GM_fetch?: (url: string, options?: any) => Promise<any>;
+  }
+}
+
+const MICROSOFT_OTP_REGEX = /(?:Security code|M[ãa]\s*b[ảaáo]o?\s*m[ậa]t|Mã bảo mật):\s*(\d{6})/i;
+const GENERIC_6_DIGIT_REGEX = /\b(\d{6})\b/;
+
+function extractOtp(rawText: string): string | null {
+  let html = rawText;
+  try {
+    const parsed = JSON.parse(rawText);
+    if (typeof parsed === 'string') html = parsed;
+  } catch (e) { }
+
+  const cleanText = html.replace(/<[^>]*>/g, '').normalize("NFC");
+
+  const m = cleanText.match(MICROSOFT_OTP_REGEX);
+  if (m) return m[1];
+
+  const m2 = cleanText.match(GENERIC_6_DIGIT_REGEX);
+  return m2?.[1] ?? null;
+}
 
 type Props = {
   row: SheetRow;
@@ -55,6 +80,13 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken }
 
   const isDone = row.isDone;
 
+  const pollingRef = useRef(false);
+  const latestTokenRef = useRef(fviaToken);
+
+  useEffect(() => {
+    latestTokenRef.current = fviaToken;
+  }, [fviaToken]);
+
   const handleCreate = async () => {
     setLoadingCreate(true);
     setErr('');
@@ -81,8 +113,6 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken }
     }
   };
 
-  const pollingRef = React.useRef(false);
-
   const handleGetOtp = async () => {
     if (!generated) return;
     if (pollingRef.current) return;
@@ -94,31 +124,97 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken }
     const maxWaitTime = 10 * 60 * 1000; // Đợi tối đa 10 phút
     let attempts = 0;
 
+    const [username, domain] = generated.split('@');
+    if (!username || !domain) {
+      setErr('Email lấy thư bị lỗi định dạng.');
+      setLoadingOtp(false);
+      return;
+    }
+
     while (pollingRef.current && attempts < (maxWaitTime / 2000)) {
       attempts++;
       try {
-        const res = await fetch('/api/wait-otp', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: generated,
-            sinceMs: createdAt ?? Date.now() - 5 * 60_000,
-            timeoutMs: 2000, // Server check trong 2 giây rồi trả về
-            fviaToken: fviaToken || ''
-          }),
+        if (!window.GM_fetch) {
+          throw new Error('Chưa cài đặt Tampermonkey Proxy Script! Không tìm thấy window.GM_fetch.');
+        }
+
+        const listUrl = `https://fviainboxes.com/messages?username=${encodeURIComponent(username)}&domain=${encodeURIComponent(domain)}&_t=${Date.now()}`;
+        const res = await window.GM_fetch(listUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://fviainboxes.com',
+            'Referer': 'https://fviainboxes.com/',
+            'Authorization': latestTokenRef.current ? `Bearer ${latestTokenRef.current}` : ''
+          }
         });
-        const data = await res.json();
-        
-        if (res.ok && data.success && data.otp) {
-          setOtp(data.otp);
-          onUpdated(row.rowIndex, { code: data.otp });
-          pollingRef.current = false;
-          setLoadingOtp(false);
-          return;
+
+        if (res.ok) {
+          const data = await res.json();
+          const messages = data.result || [];
+          let foundOtp: string | null = null;
+
+          for (const msg of messages) {
+            const fromLower = msg.from.toLowerCase();
+            if (!fromLower.includes('microsoft')) continue;
+             
+            const bodyUrl = `https://fviainboxes.com/message?username=${encodeURIComponent(username)}&domain=${encodeURIComponent(domain)}&id=${encodeURIComponent(msg.id)}`;
+            const bodyRes = await window.GM_fetch(bodyUrl, {
+              method: 'GET',
+              headers: {
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Origin': 'https://fviainboxes.com',
+                'Referer': 'https://fviainboxes.com/',
+                'Authorization': latestTokenRef.current ? `Bearer ${latestTokenRef.current}` : ''
+              }
+            });
+            
+            if (bodyRes.ok) {
+              const bodyText = await bodyRes.text();
+              const code = extractOtp(bodyText);
+              if (code) {
+                 foundOtp = code;
+                 break;
+              }
+            }
+          }
+
+          if (foundOtp) {
+            // Đã lấy được OTP, gửi lên backend để lưu sheet
+            const saveRes = await fetch('/api/wait-otp', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sheetId,
+                rowIndex: row.rowIndex,
+                otp: foundOtp
+              })
+            });
+            const saveData = await saveRes.json();
+             
+            if (saveRes.ok && saveData.success) {
+              setOtp(foundOtp);
+              onUpdated(row.rowIndex, { code: foundOtp });
+              pollingRef.current = false;
+              setLoadingOtp(false);
+              return;
+            } else {
+              console.error('Lỗi lưu sheet:', saveData.error);
+            }
+          }
+        } else if (res.status === 403 || res.status === 401) {
+           console.error('Token Fvia bị từ chối hoặc hết hạn!');
         }
       } catch (e) {
-        // Lỗi mạng hoặc server chập chờn thì bỏ qua, thử lại ở vòng lặp sau
         console.error('Lỗi khi lấy OTP:', e);
+        if (e instanceof Error && e.message.includes('GM_fetch')) {
+           setErr(e.message);
+           pollingRef.current = false;
+           setLoadingOtp(false);
+           return;
+        }
       }
       
       // Đợi 2 giây trước khi hỏi lại
