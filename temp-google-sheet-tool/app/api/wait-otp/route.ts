@@ -78,8 +78,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const effectiveTimeout = Math.min(Number(timeoutMs) || 50_000, 55_000);
-    const deadline = startedAt + effectiveTimeout;
+    // Vercel Hobby plan giới hạn 10s timeout cho function. 
+    // Do đó, giới hạn vòng lặp trên server tối đa là 8s để trả về kịp thời.
+    const deadline = Date.now() + Math.min(timeoutMs, 8_000);
     const poll = Math.max(1000, Number(pollMs) || 3000);
 
     let otp: string | null = null;
