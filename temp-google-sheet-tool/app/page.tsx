@@ -20,14 +20,25 @@ export default function Home() {
 
   const [selectedName, setSelectedName] = useState('');
   const [fviaToken, setFviaToken] = useState('');
+  const [fviaError, setFviaError] = useState('');
   const [iframeKey, setIframeKey] = useState(0);
+  const [preferredDomain, setPreferredDomain] = useState('Ngẫu nhiên (Tự động)');
 
   // Lắng nghe token từ iframe gửi lên
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.data && event.data.type === 'FVIA_TOKEN' && event.data.token) {
+      if (!event.data) return;
+      if (event.data.type === 'FVIA_TOKEN' && event.data.token) {
         setFviaToken(event.data.token);
+        setFviaError('');
         localStorage.setItem('fviaToken', event.data.token);
+      } else if (event.data.type === 'FVIA_ERROR') {
+        if (event.data.msg) {
+          setFviaError(event.data.msg);
+          setFviaToken('❌ Lỗi chặn Token');
+        } else {
+          setFviaError('');
+        }
       }
     };
     window.addEventListener('message', handleMessage);
@@ -101,6 +112,21 @@ export default function Home() {
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
             <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
               <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg shadow-sm border w-full sm:w-auto">
+                <span className="text-sm font-medium whitespace-nowrap">🌐 Đuôi Email:</span>
+                <select
+                  value={preferredDomain}
+                  onChange={(e) => setPreferredDomain(e.target.value)}
+                  className="text-sm outline-none w-full sm:w-auto bg-transparent py-1 cursor-pointer font-medium text-gray-700"
+                >
+                  <option value="Ngẫu nhiên (Tự động)">Ngẫu nhiên (Tự động)</option>
+                  <option value="fviainboxes.com">@fviainboxes.com</option>
+                  <option value="fviadropinbox.com">@fviadropinbox.com</option>
+                  <option value="fviamail.work">@fviamail.work</option>
+                  <option value="dropinboxes.com">@dropinboxes.com</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg shadow-sm border w-full sm:w-auto">
                 <span className="text-sm font-medium whitespace-nowrap">🔑 Fvia Token:</span>
                 <input
                   type="text"
@@ -115,6 +141,7 @@ export default function Home() {
                 <button
                   onClick={() => {
                     setFviaToken('⏳ Đang lấy token mới...');
+                    setFviaError('');
                     setIframeKey(k => k + 1);
                   }}
                   className="ml-2 text-gray-500 hover:text-blue-600 transition-colors"
@@ -124,6 +151,12 @@ export default function Home() {
                 </button>
               </div>
               
+              {fviaError && (
+                <div className="text-xs text-red-600 font-medium bg-red-50 border border-red-200 px-3 py-2 rounded-lg animate-pulse w-full sm:w-auto">
+                  {fviaError}
+                </div>
+              )}
+
               {/* Iframe ẩn hoàn toàn để chạy ngầm */}
               <iframe 
                 key={iframeKey}
@@ -237,6 +270,7 @@ export default function Home() {
                 sheetName={SHEET_NAME}
                 onUpdated={patchRow}
                 fviaToken={fviaToken}
+                preferredDomain={preferredDomain}
               />
             ))}
           </div>

@@ -39,9 +39,10 @@ export async function POST(request: NextRequest) {
       requestBody: { values: [[recovery]] },
     });
 
-    // Không ghi vào cột G theo yêu cầu tuyệt đối không sửa cột G
+    // Không ghi vào cột F và G theo yêu cầu
 
-    return NextResponse.json({ success: true, rowIndex, recovery });
+
+    return NextResponse.json({ success: true, rowIndex, recovery, code });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[complete-row] error:', err);

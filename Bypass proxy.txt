@@ -1,0 +1,37 @@
+// ==UserScript==
+// @name         CORS Bypass Proxy for Tool Mail
+// @namespace    http://tampermonkey.net/
+// @version      1.1
+// @description  Proxy giúp Tool Mail gọi API fviainboxes trực tiếp từ trình duyệt
+// @author       You
+// @match        *://toolcaclo.vercel.app/*
+// @match        http://localhost:3000/*
+// @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
+// ==/UserScript==
+
+(function() {
+    'use strict';
+    // Bơm hàm GM_fetch vào unsafeWindow để React xài
+    unsafeWindow.GM_fetch = function(url, options) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: options?.method || 'GET',
+                url: url,
+                headers: options?.headers || {},
+                onload: function(response) {
+                    resolve({
+                        ok: response.status >= 200 && response.status < 300,
+                        status: response.status,
+                        json: async () => JSON.parse(response.responseText),
+                        text: async () => response.responseText
+                    });
+                },
+                onerror: function(err) {
+                    reject(err);
+                }
+            });
+        });
+    };
+    console.log("🚀 [Tampermonkey Proxy] Đã tiêm thành công unsafeWindow.GM_fetch!");
+})();

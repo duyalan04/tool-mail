@@ -35,6 +35,7 @@ type Props = {
   sheetName: string;
   onUpdated: (rowIndex: number, updates: any) => void;
   fviaToken?: string;
+  preferredDomain?: string;
 };
 
 function CopyField({ label, value, color = 'blue' }: { label: string; value: string; color?: 'blue' | 'green' | 'purple' | 'gray' }) {
@@ -50,7 +51,7 @@ function CopyField({ label, value, color = 'blue' }: { label: string; value: str
       await navigator.clipboard.writeText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {}
+    } catch { }
   };
   if (!value) return null;
   return (
@@ -68,7 +69,7 @@ function CopyField({ label, value, color = 'blue' }: { label: string; value: str
   );
 }
 
-export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken }: Props) {
+export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, preferredDomain }: Props) {
   const [isCreatingMail, setIsCreatingMail] = useState(false);
   const [generated, setGenerated] = useState<string>(row.recovery);
   const [createdAt, setCreatedAt] = useState<number | null>(null);
@@ -99,6 +100,7 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken }
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
+          domain: preferredDomain && preferredDomain !== 'Ngẫu nhiên (Tự động)' ? preferredDomain : undefined,
         }),
       });
       const data = await res.json();
@@ -116,11 +118,11 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken }
   const handleGetOtp = async () => {
     if (!generated) return;
     if (pollingRef.current) return;
-    
+
     setLoadingOtp(true);
     setErr('');
     pollingRef.current = true;
-    
+
     const maxWaitTime = 10 * 60 * 1000; // Đợi tối đa 10 phút
     let attempts = 0;
 
@@ -158,7 +160,7 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken }
           for (const msg of messages) {
             const fromLower = msg.from.toLowerCase();
             if (!fromLower.includes('microsoft')) continue;
-             
+
             const bodyUrl = `https://fviainboxes.com/message?username=${encodeURIComponent(username)}&domain=${encodeURIComponent(domain)}&id=${encodeURIComponent(msg.id)}`;
             const bodyRes = await window.GM_fetch(bodyUrl, {
               method: 'GET',
@@ -170,55 +172,40 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken }
                 'Authorization': latestTokenRef.current ? `Bearer ${latestTokenRef.current}` : ''
               }
             });
-            
+
             if (bodyRes.ok) {
               const bodyText = await bodyRes.text();
               const code = extractOtp(bodyText);
               if (code) {
-                 foundOtp = code;
-                 break;
+                foundOtp = code;
+                break;
               }
             }
           }
 
           if (foundOtp) {
-            // Đã lấy được OTP, gửi lên backend để lưu sheet
-            const saveRes = await fetch('/api/wait-otp', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                sheetId,
-                rowIndex: row.rowIndex,
-                otp: foundOtp
-              })
-            });
-            const saveData = await saveRes.json();
-             
-            if (saveRes.ok && saveData.success) {
-              setOtp(foundOtp);
-              onUpdated(row.rowIndex, { code: foundOtp });
-              pollingRef.current = false;
-              setLoadingOtp(false);
-              return;
-            } else {
-              console.error('Lỗi lưu sheet:', saveData.error);
-            }
+            // Đã lấy được OTP, chỉ lưu vào State, KHÔNG ghi lên sheet tự động
+            setOtp(foundOtp);
+            onUpdated(row.rowIndex, { code: foundOtp });
+            pollingRef.current = false;
+            setLoadingOtp(false);
+            return;
           }
         } else if (res.status === 403 || res.status === 401) {
-           console.error('Token Fvia bị từ chối hoặc hết hạn!');
+          console.error('Token Fvia bị từ chối hoặc hết hạn!');
         }
       } catch (e) {
         console.error('Lỗi khi lấy OTP:', e);
         if (e instanceof Error && e.message.includes('GM_fetch')) {
-           setErr(e.message);
-           pollingRef.current = false;
-           setLoadingOtp(false);
-           return;
+          setErr(e.message);
+          pollingRef.current = false;
+          setLoadingOtp(false);
+          return;
         }
       }
-      
+
       // Đợi 2 giây trước khi hỏi lại
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 200));
     }
 
     if (pollingRef.current) {
@@ -255,18 +242,16 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken }
 
   return (
     <div
-      className={`bg-white rounded-lg shadow-md p-5 border-2 transition-all ${
-        isDone ? 'border-green-400 bg-green-50' : 'border-orange-200 bg-orange-50 hover:border-blue-300'
-      }`}
+      className={`bg-white rounded-lg shadow-md p-5 border-2 transition-all ${isDone ? 'border-green-400 bg-green-50' : 'border-orange-200 bg-orange-50 hover:border-blue-300'
+        }`}
     >
       <div className="flex justify-between items-center mb-4">
         <div className="text-xs text-gray-500">
           #{row.rowIndex} · <span className="font-medium text-gray-700">{row.name || '—'}</span>
         </div>
         <span
-          className={`px-3 py-1 rounded-full text-xs font-medium ${
-            isDone ? 'bg-green-500 text-white' : 'bg-orange-400 text-white'
-          }`}
+          className={`px-3 py-1 rounded-full text-xs font-medium ${isDone ? 'bg-green-500 text-white' : 'bg-orange-400 text-white'
+            }`}
         >
           {isDone ? '✓ Đã làm' : '⏳ Đang làm'}
         </span>
@@ -285,9 +270,8 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken }
             <div className="flex gap-2 mt-2">
               <button
                 onClick={loadingOtp ? () => { pollingRef.current = false; setLoadingOtp(false); } : handleGetOtp}
-                className={`flex-1 px-4 py-2 text-white rounded-lg transition-colors font-medium ${
-                  loadingOtp ? 'bg-orange-500 hover:bg-orange-600' : 'bg-purple-600 hover:bg-purple-700'
-                }`}
+                className={`flex-1 px-4 py-2 text-white rounded-lg transition-colors font-medium ${loadingOtp ? 'bg-orange-500 hover:bg-orange-600' : 'bg-purple-600 hover:bg-purple-700'
+                  }`}
               >
                 {loadingOtp ? '⏹ Dừng chờ OTP' : '🔐 Lấy code'}
               </button>
