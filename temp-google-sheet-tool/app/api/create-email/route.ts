@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
     }
 
     const domain = await pickDomain(preferredDomain, provider);
-    const email = `${name}@${domain}`;
+    const email = `${name}@${domain}`.toLowerCase();
     
     if (INBOXES_DOMAINS.includes(domain)) {
       try {

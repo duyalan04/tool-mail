@@ -93,7 +93,7 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
     setLoadingCreate(true);
     setErr('');
     try {
-      const baseName = row.email.split('@')[0] || 'user';
+      const baseName = (row.email.split('@')[0] || 'user').toLowerCase();
       const rnd = Math.floor(1000 + Math.random() * 9000);
       const name = `${baseName}${rnd}`;
       const res = await fetch('/api/create-email', {
@@ -231,6 +231,30 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
     }
   };
 
+  const handleError = async () => {
+    setLoadingComplete(true);
+    setErr('');
+    try {
+      const res = await fetch('/api/error-row', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sheetId,
+          sheetName,
+          rowIndex: row.rowIndex,
+          errorMsg: 'LỖI MẬT KHẨU'
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Lỗi ghi lỗi vào Sheet');
+      onUpdated(row.rowIndex, { isDone: true });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingComplete(false);
+    }
+  };
+
   return (
     <div
       className={`bg-white rounded-lg shadow-md p-5 border-2 transition-all ${isDone ? 'border-green-400 bg-green-50' : 'border-orange-200 bg-orange-50 hover:border-blue-300'
@@ -240,12 +264,24 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
         <div className="text-xs text-gray-500">
           #{row.rowIndex} · <span className="font-medium text-gray-700">{row.name || '—'}</span>
         </div>
-        <span
-          className={`px-3 py-1 rounded-full text-xs font-medium ${isDone ? 'bg-green-500 text-white' : 'bg-orange-400 text-white'
-            }`}
-        >
-          {isDone ? '✓ Đã làm' : '⏳ Đang làm'}
-        </span>
+        <div className="flex items-center gap-2">
+          {!isDone && (
+            <button
+              onClick={handleError}
+              disabled={loadingComplete}
+              title="Báo lỗi mật khẩu"
+              className="px-2 py-1 bg-red-100 text-red-600 border border-red-200 rounded text-xs font-bold hover:bg-red-200 transition-colors shadow-sm"
+            >
+              {loadingComplete ? '⏳...' : '⚠️ Lỗi Mật khẩu'}
+            </button>
+          )}
+          <span
+            className={`px-3 py-1 rounded-full text-xs font-medium ${isDone ? 'bg-green-500 text-white' : 'bg-orange-400 text-white'
+              }`}
+          >
+            {isDone ? '✓ Đã làm' : '⏳ Đang làm'}
+          </span>
+        </div>
       </div>
 
       <CopyField label="📧 Email Hotmail" value={row.email} color="blue" />
