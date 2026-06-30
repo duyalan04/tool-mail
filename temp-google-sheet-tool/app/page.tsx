@@ -22,7 +22,8 @@ export default function Home() {
   const [fviaToken, setFviaToken] = useState('');
   const [fviaError, setFviaError] = useState('');
   const [iframeKey, setIframeKey] = useState(0);
-  const [preferredDomain, setPreferredDomain] = useState('Ngẫu nhiên (Tự động)');
+  const [mailProvider, setMailProvider] = useState<'inboxes' | 'fvia'>('inboxes');
+  const [preferredDomain, setPreferredDomain] = useState('fivermail.com');
 
   // Lắng nghe token từ iframe gửi lên
   useEffect(() => {
@@ -111,18 +112,60 @@ export default function Home() {
         {!showForm && (
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
             <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
+              {/* Provider Toggle */}
+              <div className="flex bg-gray-100 p-1 rounded-lg">
+                <button
+                  onClick={() => { setMailProvider('inboxes'); setPreferredDomain('fivermail.com'); }}
+                  className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mailProvider === 'inboxes' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  Inboxes.com
+                </button>
+                <button
+                  onClick={() => { setMailProvider('fvia'); setPreferredDomain('random'); }}
+                  className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mailProvider === 'fvia' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  Fvia
+                </button>
+              </div>
+
+              {/* Domain Dropdown */}
               <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg shadow-sm border w-full sm:w-auto">
-                <span className="text-sm font-medium whitespace-nowrap">🌐 Đuôi Email:</span>
+                <span className="text-sm font-medium whitespace-nowrap">🌐 Đuôi:</span>
                 <select
                   value={preferredDomain}
                   onChange={(e) => setPreferredDomain(e.target.value)}
                   className="text-sm outline-none w-full sm:w-auto bg-transparent py-1 cursor-pointer font-medium text-gray-700"
                 >
-                  <option value="Ngẫu nhiên (Tự động)">Ngẫu nhiên (Tự động)</option>
-                  <option value="fviainboxes.com">@fviainboxes.com</option>
-                  <option value="fviadropinbox.com">@fviadropinbox.com</option>
-                  <option value="fviamail.work">@fviamail.work</option>
-                  <option value="dropinboxes.com">@dropinboxes.com</option>
+                  <option value="random">Ngẫu nhiên (Tự động)</option>
+                  {mailProvider === 'inboxes' ? (
+                    <optgroup label="Inboxes.com">
+                      <option value="blondmail.com">@blondmail.com</option>
+                      <option value="chapsmail.com">@chapsmail.com</option>
+                      <option value="clowmail.com">@clowmail.com</option>
+                      <option value="dropjar.com">@dropjar.com</option>
+                      <option value="fivermail.com">@fivermail.com</option>
+                      <option value="getairmail.com">@getairmail.com</option>
+                      <option value="getmule.com">@getmule.com</option>
+                      <option value="getnada.com">@getnada.com</option>
+                      <option value="gimpmail.com">@gimpmail.com</option>
+                      <option value="givmail.com">@givmail.com</option>
+                      <option value="guysmail.com">@guysmail.com</option>
+                      <option value="inboxbear.com">@inboxbear.com</option>
+                      <option value="replyloop.com">@replyloop.com</option>
+                      <option value="robot-mail.com">@robot-mail.com</option>
+                      <option value="tafmail.com">@tafmail.com</option>
+                      <option value="temptami.com">@temptami.com</option>
+                      <option value="tupmail.com">@tupmail.com</option>
+                      <option value="vomoto.com">@vomoto.com</option>
+                    </optgroup>
+                  ) : (
+                    <optgroup label="Fviainboxes">
+                      <option value="fviainboxes.com">@fviainboxes.com</option>
+                      <option value="fviadropinbox.com">@fviadropinbox.com</option>
+                      <option value="fviamail.work">@fviamail.work</option>
+                      <option value="dropinboxes.com">@dropinboxes.com</option>
+                    </optgroup>
+                  )}
                 </select>
               </div>
 
@@ -271,6 +314,7 @@ export default function Home() {
                 onUpdated={patchRow}
                 fviaToken={fviaToken}
                 preferredDomain={preferredDomain}
+                mailProvider={mailProvider}
               />
             ))}
           </div>

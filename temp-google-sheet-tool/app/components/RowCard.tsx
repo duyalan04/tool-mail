@@ -36,6 +36,7 @@ type Props = {
   onUpdated: (rowIndex: number, updates: any) => void;
   fviaToken?: string;
   preferredDomain?: string;
+  mailProvider: 'fvia' | 'inboxes';
 };
 
 function CopyField({ label, value, color = 'blue' }: { label: string; value: string; color?: 'blue' | 'green' | 'purple' | 'gray' }) {
@@ -69,7 +70,7 @@ function CopyField({ label, value, color = 'blue' }: { label: string; value: str
   );
 }
 
-export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, preferredDomain }: Props) {
+export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, preferredDomain, mailProvider }: Props) {
   const [isCreatingMail, setIsCreatingMail] = useState(false);
   const [generated, setGenerated] = useState<string>(row.recovery);
   const [createdAt, setCreatedAt] = useState<number | null>(null);
@@ -101,6 +102,7 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
         body: JSON.stringify({
           name,
           domain: preferredDomain && preferredDomain !== 'Ngẫu nhiên (Tự động)' ? preferredDomain : undefined,
+          provider: mailProvider,
         }),
       });
       const data = await res.json();
@@ -123,8 +125,11 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
     setErr('');
     pollingRef.current = true;
 
+    // Đợi 1 giây trước lần quét đầu tiên theo yêu cầu
+    await new Promise(r => setTimeout(r, 1000));
+
     const maxWaitTime = 10 * 60 * 1000; // Đợi tối đa 10 phút
-    let attempts = 0;
+    const startTime = Date.now();
 
     const [username, domain] = generated.split('@');
     if (!username || !domain) {
@@ -133,79 +138,65 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
       return;
     }
 
-    while (pollingRef.current && attempts < (maxWaitTime / 2000)) {
-      attempts++;
-      try {
-        if (!window.GM_fetch) {
-          throw new Error('Chưa cài đặt Tampermonkey Proxy Script! Không tìm thấy window.GM_fetch.');
-        }
+    const isFvia = mailProvider === 'fvia';
 
-        const listUrl = `https://fviainboxes.com/messages?username=${encodeURIComponent(username)}&domain=${encodeURIComponent(domain)}&_t=${Date.now()}`;
-        const res = await window.GM_fetch(listUrl, {
-          method: 'GET',
-          headers: {
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Origin': 'https://fviainboxes.com',
-            'Referer': 'https://fviainboxes.com/',
-            'Authorization': latestTokenRef.current ? `Bearer ${latestTokenRef.current}` : ''
-          }
+    let attempts = 0;
+    while (pollingRef.current && (Date.now() - startTime < maxWaitTime)) {
+      attempts++;
+      let currentWaitMs = isFvia ? 2000 : 4000; // Mặc định 2s cho Fvia, 4s cho Inboxes
+      try {
+        let foundOtp: string | null = null;
+        let isAuthError = false;
+
+        // Gọi về web (Next.js server) để fetch thư
+        const res = await fetch('/api/read-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username,
+            domain,
+            provider: mailProvider,
+            fviaToken: latestTokenRef.current
+          })
         });
 
-        if (res.ok) {
-          const data = await res.json();
-          const messages = data.result || [];
-          let foundOtp: string | null = null;
-
-          for (const msg of messages) {
-            const fromLower = msg.from.toLowerCase();
-            if (!fromLower.includes('microsoft')) continue;
-
-            const bodyUrl = `https://fviainboxes.com/message?username=${encodeURIComponent(username)}&domain=${encodeURIComponent(domain)}&id=${encodeURIComponent(msg.id)}`;
-            const bodyRes = await window.GM_fetch(bodyUrl, {
-              method: 'GET',
-              headers: {
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Origin': 'https://fviainboxes.com',
-                'Referer': 'https://fviainboxes.com/',
-                'Authorization': latestTokenRef.current ? `Bearer ${latestTokenRef.current}` : ''
-              }
-            });
-
-            if (bodyRes.ok) {
-              const bodyText = await bodyRes.text();
-              const code = extractOtp(bodyText);
-              if (code) {
-                foundOtp = code;
-                break;
-              }
-            }
+        const data = await res.json();
+        if (!data.success) {
+          isAuthError = data.status === 401 || data.status === 403;
+          if (isAuthError) {
+            console.error('Lỗi auth: Token bị từ chối hoặc hết hạn!', data.error);
           }
-
-          if (foundOtp) {
-            // Đã lấy được OTP, chỉ lưu vào State, KHÔNG ghi lên sheet tự động
-            setOtp(foundOtp);
-            onUpdated(row.rowIndex, { code: foundOtp });
-            pollingRef.current = false;
-            setLoadingOtp(false);
-            return;
-          }
-        } else if (res.status === 403 || res.status === 401) {
-          console.error('Token Fvia bị từ chối hoặc hết hạn!');
+          throw new Error(data.error || 'Lỗi khi đọc mail từ web mình');
         }
-      } catch (e) {
-        console.error('Lỗi khi lấy OTP:', e);
-        if (e instanceof Error && e.message.includes('GM_fetch')) {
-          setErr(e.message);
+
+        if (data.otp) {
+          foundOtp = data.otp;
+        }
+
+        if (foundOtp) {
+          // Đã lấy được OTP, chỉ lưu vào State, KHÔNG ghi lên sheet tự động
+          setOtp(foundOtp);
+          onUpdated(row.rowIndex, { code: foundOtp });
           pollingRef.current = false;
           setLoadingOtp(false);
           return;
         }
+      } catch (e) {
+        console.error('Lỗi khi lấy OTP:', e);
+        if (e instanceof Error) {
+          if (e.message.includes('GM_fetch') || e.message.includes('web mình')) {
+            setErr(e.message);
+            pollingRef.current = false;
+            setLoadingOtp(false);
+            return;
+          }
+          // Hiển thị tạm lỗi ra UI nếu muốn theo dõi
+          setErr(`Cảnh báo lúc lấy mail: ${e.message}`);
+        }
       }
 
-      // Đợi 2 giây trước khi hỏi lại
-      await new Promise(r => setTimeout(r, 200));
+      // Đợi trước khi hỏi lại (sử dụng currentWaitMs thay vì 200ms)
+      await new Promise(r => setTimeout(r, currentWaitMs));
     }
 
     if (pollingRef.current) {
@@ -269,7 +260,10 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
           {!otp && (
             <div className="flex gap-2 mt-2">
               <button
-                onClick={loadingOtp ? () => { pollingRef.current = false; setLoadingOtp(false); } : handleGetOtp}
+                onClick={loadingOtp ? () => {
+                  pollingRef.current = false;
+                  setLoadingOtp(false);
+                } : handleGetOtp}
                 className={`flex-1 px-4 py-2 text-white rounded-lg transition-colors font-medium ${loadingOtp ? 'bg-orange-500 hover:bg-orange-600' : 'bg-purple-600 hover:bg-purple-700'
                   }`}
               >
@@ -291,11 +285,18 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
               )}
             </div>
           )}
-          {!isDone && (
+          {isDone ? (
+            <button
+              onClick={() => onUpdated(row.rowIndex, { isDone: false })}
+              className="w-full px-4 py-2 mt-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 font-bold transition-colors"
+            >
+              ↩️ Làm lại (Bỏ đánh dấu Hoàn thành)
+            </button>
+          ) : (
             <button
               onClick={handleComplete}
               disabled={loadingComplete}
-              className="w-full px-4 py-2 mt-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 font-bold"
+              className="w-full px-4 py-2 mt-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 font-bold transition-colors"
             >
               {loadingComplete ? '⏳ Đang lưu...' : '✅ Hoàn thành & Lưu'}
             </button>
