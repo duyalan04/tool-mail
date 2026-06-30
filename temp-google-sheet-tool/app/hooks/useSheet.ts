@@ -11,6 +11,7 @@ export type SheetRow = {
   recovery: string;
   mkCapital: string;
   code: string;
+  status?: string;
   isDone: boolean;
 };
 

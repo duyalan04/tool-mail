@@ -32,10 +32,10 @@ export async function POST(request: NextRequest) {
 
     const sheets = google.sheets({ version: 'v4', auth });
 
-    // Đọc cột A đến G, từ hàng 2
+    // Đọc cột A đến H, từ hàng 2
     const result = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: `${sheetName}!A2:G`,
+      range: `${sheetName}!A2:H`,
       valueRenderOption: 'UNFORMATTED_VALUE',
     });
 
@@ -50,6 +50,7 @@ export async function POST(request: NextRequest) {
       recovery: string;
       mkCapital: string;
       code: string;
+      status: string;
       isDone: boolean;
     };
 
@@ -64,6 +65,7 @@ export async function POST(request: NextRequest) {
       if (!name && !email) continue;
 
       const recovery = String(r?.[4] ?? '').trim();
+      const status = String(r?.[7] ?? '').trim();
 
       rows.push({
         rowIndex: i + 2, // hàng 1 là tiêu đề nên +2
@@ -74,7 +76,8 @@ export async function POST(request: NextRequest) {
         recovery,
         mkCapital: String(r?.[5] ?? '').trim(),
         code: String(r?.[6] ?? '').trim(),
-        isDone: recovery.length > 0,
+        status,
+        isDone: recovery.length > 0 || status.length > 0,
       });
     }
 

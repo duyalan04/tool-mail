@@ -247,17 +247,18 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Lỗi ghi lỗi vào Sheet');
-      onUpdated(row.rowIndex, { isDone: true });
+      onUpdated(row.rowIndex, { isDone: true, status: 'LỖI MẬT KHẨU' });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setLoadingComplete(false);
     }
-  };
-
-  return (
+  };  return (
     <div
-      className={`bg-white rounded-lg shadow-md p-5 border-2 transition-all ${isDone ? 'border-green-400 bg-green-50' : 'border-orange-200 bg-orange-50 hover:border-blue-300'
+      className={`bg-white rounded-lg shadow-md p-5 border-2 transition-all ${
+        isDone 
+          ? (row.status ? 'border-red-400 bg-red-50' : 'border-green-400 bg-green-50')
+          : 'border-orange-200 bg-orange-50 hover:border-blue-300'
         }`}
     >
       <div className="flex justify-between items-center mb-4">
@@ -276,10 +277,13 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
             </button>
           )}
           <span
-            className={`px-3 py-1 rounded-full text-xs font-medium ${isDone ? 'bg-green-500 text-white' : 'bg-orange-400 text-white'
+            className={`px-3 py-1 rounded-full text-xs font-medium ${
+              isDone 
+                ? (row.status ? 'bg-red-500 text-white' : 'bg-green-500 text-white')
+                : 'bg-orange-400 text-white'
               }`}
           >
-            {isDone ? '✓ Đã làm' : '⏳ Đang làm'}
+            {isDone ? (row.status ? `❌ ${row.status}` : '✓ Đã làm') : '⏳ Đang làm'}
           </span>
         </div>
       </div>

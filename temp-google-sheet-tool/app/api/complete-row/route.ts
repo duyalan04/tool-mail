@@ -39,7 +39,13 @@ export async function POST(request: NextRequest) {
       requestBody: { values: [[recovery]] },
     });
 
-    // Không ghi vào cột F và G theo yêu cầu
+    // Xóa lỗi ở cột H nếu có (khi người dùng làm lại một row từng bị lỗi)
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: sheetId,
+      range: `${sheetName}!H${rowIndex}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [['']] },
+    });
 
 
     return NextResponse.json({ success: true, rowIndex, recovery, code });
