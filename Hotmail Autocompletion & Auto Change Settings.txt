@@ -45,8 +45,12 @@
         debugDiv.innerHTML = '⚙️ [Debugger]<br>' + msg;
     }
 
-    const API_OTP_BRIDGE = 'http://127.0.0.1:3000/api/otp-bridge';
-    const API_CURRENT_ACCOUNT = 'http://127.0.0.1:3000/api/current-account';
+    function getBaseUrl() {
+        return sessionStorage.getItem("tool_base_url") || 'http://127.0.0.1:3000';
+    }
+
+    function getApiOtpBridge() { return `${getBaseUrl()}/api/otp-bridge`; }
+    function getApiCurrentAccount() { return `${getBaseUrl()}/api/current-account`; }
 
     function safeFill(element, value) {
         if (!element) return false;
@@ -196,6 +200,9 @@
             const jsonStr = decodeURIComponent(escape(atob(base64Str)));
             const data = JSON.parse(jsonStr);
             if (data && data.email) {
+                if (data.baseUrl) {
+                    sessionStorage.setItem("tool_base_url", data.baseUrl);
+                }
                 const keyEmail = data.email.toLowerCase().trim();
                 sessionStorage.setItem("active_email", keyEmail);
                 // V5.23: CỰC KỲ QUAN TRỌNG: XÓA BIẾN ĐẾM MỖI KHI BẬT TÀI KHOẢN MỚI
@@ -237,7 +244,7 @@
                     if (!acc) acc = GM_getValue("active_account", null);
 
                     if (!acc) {
-                        makeRequest(API_CURRENT_ACCOUNT, "GET", null, function(err, responseText) {
+                        makeRequest(getApiCurrentAccount(), "GET", null, function(err, responseText) {
                             if (err) {
                                 setDebug(`⚠️ Mất kết nối Web Tool! Vui lòng đóng tab này và bấm "Vào Hotmail" lại.`);
                                 return;
@@ -386,7 +393,7 @@
                     if (hasError || clickCount >= 3) {
                         setDebug(`❌ Lỗi Mật Khẩu (Hoặc bị kẹt vòng lặp)! Đang báo cáo...`, '#e11d48');
 
-                        makeRequest('http://127.0.0.1:3000/api/mark-error', 'POST', {
+                        makeRequest(`${getBaseUrl()}/api/mark-error`, 'POST', {
                             sheetId: acc.sheetId,
                             sheetName: acc.sheetName,
                             rowIndex: acc.rowIndex,
@@ -478,7 +485,7 @@
         }
 
         setDebug(`⏳ Đang chờ OTP từ: ${targetOtpEmail}...`, '#d97706');
-        makeRequest(`${API_OTP_BRIDGE}?email=${encodeURIComponent(targetOtpEmail || '')}`, "GET", null, function(err, responseText) {
+        makeRequest(`${getApiOtpBridge()}?email=${encodeURIComponent(targetOtpEmail || '')}`, "GET", null, function(err, responseText) {
             if (err) return;
             try {
                 const data = JSON.parse(responseText);
@@ -747,7 +754,7 @@
         }
 
         setDebug(`⏳ Đang chờ OTP từ: ${targetOtpEmail}...`, '#d97706');
-        makeRequest(`${API_OTP_BRIDGE}?email=${encodeURIComponent(targetOtpEmail || '')}`, "GET", null, function(err, responseText) {
+        makeRequest(`${getApiOtpBridge()}?email=${encodeURIComponent(targetOtpEmail || '')}`, "GET", null, function(err, responseText) {
             if (err) return;
             try {
                 const data = JSON.parse(responseText);

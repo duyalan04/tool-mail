@@ -595,7 +595,8 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
                 sheetId,
                 sheetName,
                 rowIndex: row.rowIndex,
-                mode
+                mode,
+                baseUrl: window.location.origin
               };
               try {
                 await fetch('/api/current-account', {
@@ -729,7 +730,8 @@ export function RowCard({ row, index, sheetId, sheetName, onUpdated, fviaToken, 
                     newRecovery: generated,
                     oldRecovery: row.oldRecovery || '',
                     mkCapital: row.mkCapital,
-                    newMkCapital: newMkCapital || row.newMkCapital || ''
+                    newMkCapital: newMkCapital || row.newMkCapital || '',
+                    baseUrl: window.location.origin
                   })
                 });
               } catch (e) {
