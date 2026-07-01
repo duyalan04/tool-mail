@@ -5,11 +5,11 @@ export const maxDuration = 30;
 
 export async function POST(request: NextRequest) {
   try {
-    const { sheetId, sheetName = 'Sheet1', rowIndex, recovery, code } = await request.json();
+    const { sheetId, sheetName = 'Sheet1', rowIndex, recovery, code, mode = 'default', newMkHotmail = '', newMkCapital = '', email = '' } = await request.json();
 
-    if (!sheetId || !rowIndex || !recovery) {
+    if (!sheetId || !rowIndex) {
       return NextResponse.json(
-        { success: false, error: 'Thiếu tham số: sheetId, rowIndex hoặc recovery' },
+        { success: false, error: 'Thiếu tham số: sheetId hoặc rowIndex' },
         { status: 400 }
       );
     }
@@ -32,20 +32,24 @@ export async function POST(request: NextRequest) {
 
     const sheets = google.sheets({ version: 'v4', auth });
 
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: sheetId,
-      range: `${sheetName}!E${rowIndex}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [[recovery]] },
-    });
-
-    // Xóa lỗi ở cột H nếu có (khi người dùng làm lại một row từng bị lỗi)
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: sheetId,
-      range: `${sheetName}!H${rowIndex}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [['']] },
-    });
+    if (mode === 'capital') {
+      // Ghi 4 cột bắt đầu từ cột K: K (Email Hotmail), L (MK Hotmail mới), M (Mail khôi phục mới), N (MK Capital mới)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: sheetId,
+        range: `'${sheetName}'!K${rowIndex}`,
+        valueInputOption: 'RAW',
+        requestBody: { 
+          values: [[email, newMkHotmail, recovery, newMkCapital]] 
+        },
+      });
+    } else {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: sheetId,
+        range: `'${sheetName}'!E${rowIndex}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[recovery]] },
+      });
+    }
 
 
     return NextResponse.json({ success: true, rowIndex, recovery, code });

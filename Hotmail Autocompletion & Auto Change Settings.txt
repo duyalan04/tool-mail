@@ -1,0 +1,771 @@
+// ==UserScript==
+// @name         Hotmail Autocompletion & Auto Change Settings (API Sync 5.23)
+// @namespace    http://tampermonkey.net/
+// @version      5.23
+// @description  Trị dứt điểm vòng lặp vô tận của Microsoft khi sai pass mà không báo lỗi
+// @author       Antigravity AI
+// @match        https://login.live.com/*
+// @match        https://account.live.com/*
+// @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @connect      127.0.0.1
+// @connect      localhost
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    let debugDiv = null;
+    function initDebug() {
+        if (debugDiv) return;
+        debugDiv = document.createElement('div');
+        debugDiv.style.position = 'fixed';
+        debugDiv.style.top = '10px';
+        debugDiv.style.left = '10px';
+        debugDiv.style.background = '#e11d48';
+        debugDiv.style.color = 'white';
+        debugDiv.style.padding = '12px 16px';
+        debugDiv.style.borderRadius = '8px';
+        debugDiv.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.3)';
+        debugDiv.style.zIndex = '9999999';
+        debugDiv.style.fontSize = '13px';
+        debugDiv.style.fontFamily = 'monospace';
+        debugDiv.style.lineHeight = '1.5';
+        debugDiv.style.maxWidth = '400px';
+        debugDiv.style.wordBreak = 'break-all';
+        debugDiv.innerHTML = '⚙️ [Debugger] Đang khởi động...';
+        document.body.appendChild(debugDiv);
+    }
+
+    function setDebug(msg, color = '#e11d48') {
+        if (!debugDiv) initDebug();
+        debugDiv.style.background = color;
+        debugDiv.innerHTML = '⚙️ [Debugger]<br>' + msg;
+    }
+
+    const API_OTP_BRIDGE = 'http://127.0.0.1:3000/api/otp-bridge';
+    const API_CURRENT_ACCOUNT = 'http://127.0.0.1:3000/api/current-account';
+
+    function safeFill(element, value) {
+        if (!element) return false;
+        try {
+            element.focus();
+            const prototype = Object.getPrototypeOf(element);
+            const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+
+            if (descriptor && descriptor.set) {
+                descriptor.set.call(element, value);
+            } else {
+                element.value = value;
+            }
+
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: value }));
+            element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: value }));
+        } catch (e) {
+            console.error('[Tampermonkey] Lỗi safeFill:', e);
+            element.value = value;
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        return true;
+    }
+
+    function safeClick(element) {
+        if (!element) return false;
+        try {
+            element.focus();
+            const clickEvent = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window
+            });
+            element.dispatchEvent(clickEvent);
+            if (typeof element.click === 'function') {
+                element.click();
+            }
+        } catch (e) {
+            console.error('[Tampermonkey] Lỗi safeClick:', e);
+            element.click();
+        }
+        return true;
+    }
+
+    function makeRequest(url, method, data, callback) {
+        if (typeof GM_xmlhttpRequest !== 'undefined') {
+            GM_xmlhttpRequest({
+                method: method,
+                url: url,
+                headers: { "Content-Type": "application/json" },
+                data: data ? JSON.stringify(data) : null,
+                onload: function(res) { callback(null, res.responseText); },
+                onerror: function(err) {
+                    fetch(url, {
+                        method: method,
+                        headers: data ? { "Content-Type": "application/json" } : {},
+                        body: data ? JSON.stringify(data) : null
+                    })
+                    .then(r => r.text())
+                    .then(text => callback(null, text))
+                    .catch(e => callback(e, null));
+                }
+            });
+        }
+    }
+
+    function getEmailOnScreen() {
+        const banner = document.querySelector('#identityBanner, .identity, #displayName, #emailDisplayName, .use_another_account, .username');
+        if (banner && banner.textContent) {
+            const emailMatch = banner.textContent.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/);
+            if (emailMatch) return emailMatch[0].toLowerCase().trim();
+        }
+
+        const matches = document.body.innerText.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/g);
+        if (matches) {
+            const mainEmail = matches.find(m => m.toLowerCase().endsWith('hotmail.com') || m.toLowerCase().endsWith('outlook.com') || m.toLowerCase().endsWith('live.com'));
+            if (mainEmail) return mainEmail.toLowerCase().trim();
+        }
+        return null;
+    }
+
+    function isOldRecoveryEmail(emailText, acc) {
+        const emailLower = emailText.toLowerCase().trim();
+        if (acc.email && emailLower === acc.email.toLowerCase().trim()) return false;
+        if (acc.newRecovery && emailLower === acc.newRecovery.toLowerCase().trim()) return false;
+
+        const newDomains = ['smvmail.com', 'fivermail.com', 'fviainboxes.com', 'fviadropinbox.com', 'fviamail.work', 'dropinboxes.com'];
+        const hasNewDomain = newDomains.some(d => emailLower.endsWith('@' + d));
+
+        if (emailLower.includes('@') && !hasNewDomain) {
+            return true;
+        }
+        return false;
+    }
+
+    function hasOtpErrorOnPage() {
+        const txt = (document.body.innerText || '').toLowerCase();
+        return txt.includes('sai mã') ||
+               txt.includes('thử lại') ||
+               txt.includes("didn't work") ||
+               txt.includes('incorrect code') ||
+               txt.includes('mã không hợp lệ') ||
+               txt.includes('invalid code') ||
+               document.getElementById('idDiv_SAOTCC_Error') !== null ||
+               document.getElementById('idDiv_SAOTCS_Error') !== null ||
+               document.querySelector('.alert-error') !== null;
+    }
+
+    function hasPasswordErrorOnPage() {
+        try {
+            const txt = (document.body.innerText || '').toLowerCase().normalize("NFC");
+            const cleanTxt = txt.replace(/\s+/g, '');
+
+            if (cleanTxt.includes('mậtkhẩucủabạnkhôngđúng') ||
+                cleanTxt.includes('mậtkhẩuđókhôngđúng') ||
+                cleanTxt.includes('mậtkhẩukhôngđúng') ||
+                cleanTxt.includes('incorrectpassword') ||
+                cleanTxt.includes('mậtkhẩukhôngchínhxác') ||
+                cleanTxt.includes("doesn'tmatch")) {
+                return true;
+            }
+
+            const errorNodes = document.querySelectorAll('[id*="Error" i], [class*="error" i]');
+            for (let i = 0; i < errorNodes.length; i++) {
+                const el = errorNodes[i];
+                if (el.offsetWidth > 0 && el.textContent) {
+                    const elTxt = el.textContent.toLowerCase().normalize("NFC");
+                    if (elTxt.includes('mật khẩu') || elTxt.includes('password')) {
+                        return true;
+                    }
+                }
+            }
+        } catch (e) {
+            console.error(e);
+        }
+        return false;
+    }
+
+    // ĐỌC HASH URL ĐỂ GHI NHẬN TÀI KHOẢN VÀ CÔ LẬP TRONG SESSION STORAGE
+    const hash = window.location.hash;
+    if (hash && hash.includes('acc=')) {
+        try {
+            const base64Str = hash.split('acc=')[1].split('&')[0];
+            const jsonStr = decodeURIComponent(escape(atob(base64Str)));
+            const data = JSON.parse(jsonStr);
+            if (data && data.email) {
+                const keyEmail = data.email.toLowerCase().trim();
+                sessionStorage.setItem("active_email", keyEmail);
+                // V5.23: CỰC KỲ QUAN TRỌNG: XÓA BIẾN ĐẾM MỖI KHI BẬT TÀI KHOẢN MỚI
+                sessionStorage.setItem("password_click_count", "0");
+                sessionStorage.setItem("last_otp_error_time", "0");
+
+                GM_setValue("acc_" + keyEmail, data);
+                GM_setValue("last_active_email", keyEmail);
+                GM_setValue("active_account", data);
+                console.log('[Tampermonkey] Đã khóa tài khoản thành công cho tab này:', keyEmail);
+            }
+        } catch (e) {
+            console.error('[Tampermonkey] Lỗi parse Hash URL:', e);
+        }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+        initDebug();
+
+        setTimeout(() => {
+            const interval = setInterval(() => {
+                try {
+                    let currentEmail = sessionStorage.getItem("active_email");
+                    if (!currentEmail) {
+                        currentEmail = getEmailOnScreen();
+                    }
+                    if (!currentEmail) {
+                        currentEmail = GM_getValue("last_active_email", "");
+                    }
+
+                    if (hasOtpErrorOnPage()) {
+                        const lastErr = Number(sessionStorage.getItem("last_otp_error_time") || 0);
+                        if (Date.now() - lastErr > 45000) {
+                            sessionStorage.setItem("last_otp_error_time", Date.now());
+                        }
+                    }
+
+                    let acc = currentEmail ? GM_getValue("acc_" + currentEmail.toLowerCase().trim(), null) : null;
+                    if (!acc) acc = GM_getValue("active_account", null);
+
+                    if (!acc) {
+                        makeRequest(API_CURRENT_ACCOUNT, "GET", null, function(err, responseText) {
+                            if (err) {
+                                setDebug(`⚠️ Mất kết nối Web Tool! Vui lòng đóng tab này và bấm "Vào Hotmail" lại.`);
+                                return;
+                            }
+                            try {
+                                const resData = JSON.parse(responseText);
+                                if (resData.success && resData.account) {
+                                    acc = resData.account;
+                                    const keyEmail = acc.email.toLowerCase().trim();
+                                    sessionStorage.setItem("active_email", keyEmail);
+                                    GM_setValue("acc_" + keyEmail, acc);
+                                    GM_setValue("last_active_email", keyEmail);
+                                    GM_setValue("active_account", acc);
+                                    setDebug(`Đồng bộ OK! (Fallback) 🚀<br>📧 Đang xử lý: ${acc.email}`, '#16a34a');
+                                    runStep(acc, interval);
+                                } else {
+                                    setDebug(`⚠️ Không tìm thấy cấu hình! Bạn cần bấm "Vào Hotmail" lại trên giao diện công cụ.`);
+                                }
+                            } catch (e) {
+                                console.error('Lỗi parse fallback config:', e);
+                            }
+                        });
+                    } else {
+                        if (acc.email) {
+                            const keyEmail = acc.email.toLowerCase().trim();
+                            if (sessionStorage.getItem("active_email") !== keyEmail) {
+                                sessionStorage.setItem("active_email", keyEmail);
+                            }
+                        }
+                        setDebug(`Đồng bộ OK! 🚀<br>📧 Đang xử lý: ${acc.email}`, '#16a34a');
+                        runStep(acc, interval);
+                    }
+
+                } catch (e) {
+                    setDebug('Lỗi vòng lặp: ' + e.message, '#be123c');
+                }
+            }, 800);
+        }, 800);
+    });
+
+    function runStep(acc, interval) {
+        const isAccountPage = window.location.host.includes('account.live.com');
+
+        if (isAccountPage) {
+            runAccountSecurityStep(acc, interval);
+        } else {
+            runLoginStep(acc, interval);
+        }
+    }
+
+    function runLoginStep(acc, interval) {
+        const email = acc.email;
+        const pass = acc.password;
+        const old_recovery = acc.oldRecovery;
+
+        const singleInput = document.querySelector('input[name="otc"], input#idTxtBx_SAOTCC_OTC, input#otcTextBox');
+        const allTelInputs = Array.from(document.querySelectorAll('input')).filter(el =>
+            el.offsetWidth > 0 &&
+            el.type !== 'hidden' &&
+            (el.name?.includes('otc') || el.id?.includes('otc') || el.maxLength === 1 || el.type === 'tel')
+        );
+
+        if (singleInput || allTelInputs.length > 0) {
+            handleLoginOtp(acc, singleInput, allTelInputs);
+            return;
+        }
+
+        const kmsiTitle = document.querySelector('#kmsiTitle, .kmsi');
+        if (kmsiTitle) {
+            const staySignedBtn = document.querySelector('#idSIButton9, button[type="submit"], input[type="submit"]');
+            if (staySignedBtn) {
+                setDebug(`🚪 Duy trì đăng nhập (KMSI)...`, '#16a34a');
+                safeClick(staySignedBtn);
+                clearInterval(interval);
+            }
+            return;
+        }
+
+        const sendCodeBtn = Array.from(document.querySelectorAll('input[type="submit"], input[type="button"], button')).find(el => {
+            const txt = (el.textContent || el.value || '').trim().toLowerCase();
+            return txt === 'gửi mã' || txt === 'send code' || txt.includes('gửi mã') || txt.includes('send code');
+        });
+
+        const nextBtn = document.querySelector('input[type="submit"], button[type="submit"], #idSIButton9, button#submitBtn');
+        const emailInput = document.querySelector('input[type="email"], input[name="loginfmt"], input#i0116');
+        const passInput = document.querySelector('input[type="password"], input[name="passwd"], input#passwordEntry');
+
+        let emailConfirmInput = document.querySelector('input[name="proof"], input#i0027, input#otcEmail, input#emailTxt, input#i0118:not([type="password"])');
+        if (!emailConfirmInput && sendCodeBtn) {
+            emailConfirmInput = Array.from(document.querySelectorAll('input')).find(el =>
+                el.offsetWidth > 0 &&
+                el.type !== 'password' &&
+                el.type !== 'checkbox' &&
+                el.type !== 'submit' &&
+                el.type !== 'button' &&
+                el.type !== 'hidden' &&
+                !el.id.includes('otc') &&
+                el.maxLength !== 1
+            );
+        }
+
+        const switchToPasswordLink = Array.from(document.querySelectorAll('a, button, input, [role="button"], [role="link"], #idA_PWD_SwitchToPassword')).find(el => {
+            const txt = (el.textContent || el.value || '').trim().toLowerCase();
+            return el.id === 'idA_PWD_SwitchToPassword' ||
+                   txt.includes('sử dụng mật khẩu') ||
+                   txt.includes('use your password') ||
+                   txt.includes('use a password') ||
+                   txt.includes('mật khẩu của bạn');
+        });
+        if (switchToPasswordLink && (!passInput || passInput.offsetWidth === 0)) {
+            setDebug(`🔗 Click [Sử dụng mật khẩu]...`, '#0284c7');
+            safeClick(switchToPasswordLink);
+            return;
+        }
+
+        if (emailInput && emailInput.offsetWidth > 0 && (!passInput || passInput.offsetWidth === 0) && !emailConfirmInput) {
+            if (emailInput.value !== email) {
+                setDebug(`📧 Đang điền Email: ${email}`, '#0284c7');
+                safeFill(emailInput, email);
+            } else {
+                if (nextBtn) {
+                    setDebug(`🖱️ Email đã điền. Click Tiếp theo...`, '#0284c7');
+                    safeClick(nextBtn);
+                }
+            }
+            return;
+        }
+
+        if (passInput && passInput.offsetWidth > 0 && !emailConfirmInput) {
+            if (passInput.value !== pass) {
+                setDebug(`🔑 Đang điền Password...`, '#0284c7');
+                safeFill(passInput, pass);
+            } else {
+                const signInBtn = document.querySelector('input[type="submit"], button[type="submit"], #idSIButton9, button#submitBtn');
+                if (signInBtn) {
+                    // Tránh click bồi khi đang xoay vòng
+                    if (signInBtn.disabled || signInBtn.hasAttribute('disabled') || signInBtn.getAttribute('aria-disabled') === 'true' || signInBtn.classList.contains('ext-button-disabled')) {
+                        setDebug(`⏳ Chờ Microsoft tải...`, '#d97706');
+                        return;
+                    }
+
+                    let clickCount = Number(sessionStorage.getItem("password_click_count") || 0);
+                    const hasError = hasPasswordErrorOnPage();
+
+                    // V5.23: BẮT LỖI CẢ KHI MICROSOFT KHÔNG HIỆN CHỮ MÀ TỰ LÀM MỚI TRANG
+                    if (hasError || clickCount >= 3) {
+                        setDebug(`❌ Lỗi Mật Khẩu (Hoặc bị kẹt vòng lặp)! Đang báo cáo...`, '#e11d48');
+
+                        makeRequest('http://127.0.0.1:3000/api/mark-error', 'POST', {
+                            sheetId: acc.sheetId,
+                            sheetName: acc.sheetName,
+                            rowIndex: acc.rowIndex,
+                            mode: acc.mode
+                        }, function() {
+                            setDebug(`❌ Đã báo lỗi thành công! Đang tự động đóng tab...`, '#e11d48');
+                            setTimeout(() => {
+                                window.close();
+                                document.body.innerHTML = `
+                                    <div style="display:flex; height:100vh; width:100vw; background:#fff1f2; justify-content:center; align-items:center; flex-direction:column; text-align:center;">
+                                        <h1 style="color:#be123c; font-size:48px; margin-bottom:20px;">TÀI KHOẢN NÀY LỖI RỒI!</h1>
+                                        <p style="color:#881337; font-size:24px;">Hệ thống bôi đỏ lên Google Sheet thành công.</p>
+                                        <p style="color:#4c0519; font-size:20px; font-weight:bold; margin-top:30px;">Bạn yên tâm tắt trang này nhé (Trình duyệt đang chặn tự tắt).</p>
+                                    </div>
+                                `;
+                            }, 1000);
+                        });
+
+                        clearInterval(interval);
+                        return;
+                    }
+
+                    clickCount++;
+                    sessionStorage.setItem("password_click_count", clickCount);
+
+                    setDebug(`🖱️ Click Đăng nhập (Lần ${clickCount})...`, '#0284c7');
+                    safeClick(signInBtn);
+                }
+            }
+            return;
+        }
+
+        if (!emailConfirmInput) {
+            const sendCodeTile = Array.from(document.querySelectorAll('.tile-layout, .tile, [role="button"], a')).find(el =>
+                el.textContent.includes('trangcode.com') ||
+                el.textContent.includes('Gửi mã đến') ||
+                el.textContent.includes('Send code to') ||
+                (old_recovery && el.textContent.includes(old_recovery.substring(0, 2)))
+            );
+            if (sendCodeTile) {
+                setDebug(`📬 Đang chọn gửi mã đến Mail cũ...`, '#0284c7');
+                safeClick(sendCodeTile);
+                return;
+            }
+        }
+
+        if (emailConfirmInput) {
+            if (emailConfirmInput.value !== old_recovery) {
+                setDebug(`📬 Điền xác nhận Mail cũ: ${old_recovery}`, '#0284c7');
+                safeFill(emailConfirmInput, old_recovery);
+            } else {
+                if (sendCodeBtn) {
+                    setDebug(`🖱️ Click gửi mã OTP...`, '#0284c7');
+                    safeClick(sendCodeBtn);
+                }
+            }
+            return;
+        }
+    }
+
+    function handleLoginOtp(acc, singleInput, allTelInputs) {
+        const lastErrorTime = Number(sessionStorage.getItem("last_otp_error_time") || 0);
+        const secondsPassed = (Date.now() - lastErrorTime) / 1000;
+        if (secondsPassed < 35) {
+            const waitSeconds = Math.ceil(35 - secondsPassed);
+            setDebug(`⏳ Phát hiện nhập sai mã. Tạm ngưng ${waitSeconds}s để chờ mã mới...`, '#d97706');
+            return;
+        }
+
+        const pageText = (document.body.innerText || '').toLowerCase();
+        let targetOtpEmail = acc.oldRecovery;
+
+        if (acc.newRecovery) {
+            const newRecLower = acc.newRecovery.toLowerCase();
+            const newPrefix = newRecLower.substring(0, 3);
+            const newDomain = newRecLower.split('@')[1] || '';
+            if (pageText.includes(newPrefix) && pageText.includes(newDomain)) {
+                targetOtpEmail = acc.newRecovery;
+            }
+        }
+
+        if (targetOtpEmail !== acc.newRecovery && acc.oldRecovery) {
+            const oldRecLower = acc.oldRecovery.toLowerCase();
+            const oldPrefix = oldRecLower.substring(0, 3);
+            const oldDomain = oldRecLower.split('@')[1] || '';
+            if (pageText.includes(oldPrefix) && pageText.includes(oldDomain)) {
+                targetOtpEmail = acc.oldRecovery;
+            }
+        }
+
+        setDebug(`⏳ Đang chờ OTP từ: ${targetOtpEmail}...`, '#d97706');
+        makeRequest(`${API_OTP_BRIDGE}?email=${encodeURIComponent(targetOtpEmail || '')}`, "GET", null, function(err, responseText) {
+            if (err) return;
+            try {
+                const data = JSON.parse(responseText);
+                if (data.success && data.otp) {
+                    if (allTelInputs.length === data.otp.length) {
+                        setDebug(`🔐 Điền OTP chia nhỏ: ${data.otp}`, '#16a34a');
+                        let filledAll = true;
+                        for (let i = 0; i < allTelInputs.length; i++) {
+                            if (allTelInputs[i].value !== data.otp[i]) {
+                                safeFill(allTelInputs[i], data.otp[i]);
+                                filledAll = false;
+                            }
+                        }
+                        if (filledAll) {
+                            const verifyBtn = document.querySelector('input[type="submit"], button[type="submit"], #idSIButton9, #submitBtn');
+                            if (verifyBtn) {
+                                setDebug(`🖱️ Xác minh đăng nhập...`, '#16a34a');
+                                safeClick(verifyBtn);
+                            }
+                        }
+                    } else if (singleInput && singleInput.value !== data.otp) {
+                        setDebug(`🔐 Điền OTP đơn lẻ: ${data.otp}`, '#16a34a');
+                        safeFill(singleInput, data.otp);
+                        setTimeout(() => {
+                            const verifyBtn = document.querySelector('input[type="submit"], button[type="submit"], #idSIButton9, #submitBtn');
+                            if (verifyBtn) {
+                                safeClick(verifyBtn);
+                            }
+                        }, 500);
+                    }
+                }
+            } catch (e) {
+                console.error('Lỗi parse OTP:', e);
+            }
+        });
+    }
+
+    function runAccountSecurityStep(acc, interval) {
+        const newPassInput = document.getElementById('iPassword');
+        const retypePassInput = document.getElementById('iRetypePassword');
+        const updatePassBtn = document.getElementById('UpdatePasswordAction');
+
+        if (newPassInput && retypePassInput && acc.newPassword) {
+            if (newPassInput.value !== acc.newPassword) {
+                setDebug(`🔑 Đang điền mật khẩu mới...`, '#0284c7');
+                safeFill(newPassInput, acc.newPassword);
+                safeFill(retypePassInput, acc.newPassword);
+            } else {
+                if (updatePassBtn) {
+                    setDebug(`💾 Đang lưu mật khẩu mới...`, '#16a34a');
+                    safeClick(updatePassBtn);
+                }
+            }
+            return;
+        }
+
+        const actionBtn = document.getElementById('iBtn_action');
+        if (actionBtn && actionBtn.offsetWidth > 0) {
+            setDebug(`🖱️ Click Xác nhận Xóa / OK...`, '#16a34a');
+            safeClick(actionBtn);
+            return;
+        }
+
+        const singleInput = document.querySelector('input[name="code"], input[name="verificationCode"], input#VerificationCode, input#iOttText, input[name="iOttText"]');
+        if (singleInput && singleInput.offsetWidth > 0) {
+            handleAccountOtp(acc, singleInput);
+            return;
+        }
+
+        const pageText = document.body.innerText || '';
+
+        const emailElementsAll = Array.from(document.querySelectorAll('*')).filter(el => {
+            return el.children.length === 0 && el.textContent && el.textContent.includes('@') && el.textContent.includes('.');
+        });
+
+        let actualHasNewRecovery = false;
+        const newDomains = ['smvmail.com', 'fivermail.com', 'fviainboxes.com', 'fviadropinbox.com', 'fviamail.work', 'dropinboxes.com'];
+        for (const el of emailElementsAll) {
+            const txt = el.textContent.toLowerCase().trim();
+            if (newDomains.some(d => txt.endsWith('@' + d))) {
+                actualHasNewRecovery = true;
+                break;
+            }
+        }
+
+        const hasNewRecoveryOnPage = actualHasNewRecovery || (acc.newRecovery && pageText.toLowerCase().includes(acc.newRecovery.toLowerCase()));
+
+        const recoveryInputs = Array.from(document.querySelectorAll('input[type="email"], input[name="EmailAddress"], input[name="email"], input[placeholder*="example.com"], #EmailAddress, #emailAddress'));
+        const recoveryInput = recoveryInputs.find(el => el.offsetWidth > 0);
+
+        if (!hasNewRecoveryOnPage && recoveryInput && acc.newRecovery && recoveryInput.value !== acc.newRecovery) {
+            setDebug(`📬 Điền Email khôi phục mới: ${acc.newRecovery}`, '#0284c7');
+            safeFill(recoveryInput, acc.newRecovery);
+
+            let nextBtn = document.querySelector('input[type="submit"], button[type="submit"], #submitButton, #idSIButton9');
+            if (!nextBtn) {
+                nextBtn = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"]')).find(btn => {
+                    const txt = (btn.textContent || btn.value || '').trim().toLowerCase();
+                    return txt === 'tiếp theo' || txt === 'next' || txt.includes('tiếp') || txt.includes('next');
+                });
+            }
+
+            if (nextBtn) {
+                setTimeout(() => safeClick(nextBtn), 600);
+            }
+            return;
+        }
+
+        if (!hasNewRecoveryOnPage && !recoveryInput) {
+            const addMethodLink = Array.from(document.querySelectorAll('a, button, [role="button"], span')).find(el => {
+                const txt = (el.textContent || '').trim().toLowerCase();
+                return txt.includes('thêm một cách đăng nhập') || txt.includes('add a new way to sign in');
+            });
+
+            if (addMethodLink) {
+                let emailOption = document.getElementById('Add_email') || document.getElementById('Email');
+
+                if (!emailOption) {
+                    emailOption = Array.from(document.querySelectorAll('a, button, [role="button"], span, div')).find(el => {
+                        const txt = (el.textContent || '').trim().toLowerCase();
+                        const isEmailMatch = txt.includes('gửi mã qua email') || txt.includes('email a code');
+
+                        if (isEmailMatch) {
+                            let parent = el.parentElement;
+                            for (let depth = 0; depth < 3 && parent; depth++) {
+                                const parentTxt = (parent.textContent || '').toLowerCase();
+                                if (parentTxt.includes('@') || (acc.oldRecovery && parentTxt.includes(acc.oldRecovery.toLowerCase()))) {
+                                    return false;
+                                }
+                                parent = parent.parentElement;
+                            }
+                            return true;
+                        }
+                        return false;
+                    });
+                }
+
+                if (emailOption) {
+                    let clickableEl = emailOption;
+                    let parent = emailOption.parentElement;
+                    for (let depth = 0; depth < 3 && parent; depth++) {
+                        if (parent.id === 'Add_email' || parent.id === 'Email' || parent.getAttribute('role') === 'button' || parent.tagName === 'A' || parent.tagName === 'BUTTON') {
+                            clickableEl = parent;
+                            break;
+                        }
+                        parent = parent.parentElement;
+                    }
+
+                    setDebug(`📬 Click chọn Gửi mã qua email...`, '#0284c7');
+                    safeClick(clickableEl);
+                } else {
+                    setDebug(`➕ Click thêm cách đăng nhập...`, '#0284c7');
+                    safeClick(addMethodLink);
+                }
+                return;
+            }
+        }
+
+        let hasOldRecoveryOnPage = false;
+        const emailElements = Array.from(document.querySelectorAll('*')).filter(el => {
+            return el.children.length === 0 &&
+                   el.textContent &&
+                   isOldRecoveryEmail(el.textContent, acc);
+        });
+
+        if (hasNewRecoveryOnPage && emailElements.length > 0) {
+            hasOldRecoveryOnPage = true;
+            for (const emailEl of emailElements) {
+                let parent = emailEl.parentElement;
+                let rowContainer = null;
+                for (let depth = 0; depth < 5 && parent; depth++) {
+                    if (parent.classList.contains('box') || parent.classList.contains('pullout') || parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button') {
+                        rowContainer = parent;
+                        break;
+                    }
+                    parent = parent.parentElement;
+                }
+
+                if (rowContainer) {
+                    const deleteBtn = Array.from(rowContainer.querySelectorAll('*')).find(btn => {
+                        if (btn.children.length > 0) return false;
+                        const txt = (btn.textContent || btn.value || '').trim().toLowerCase();
+                        return btn.id === 'Remove' || txt === 'xóa' || txt === 'remove';
+                    });
+
+                    if (deleteBtn && deleteBtn.offsetWidth > 0) {
+                        setDebug(`🗑️ Click nút Xóa email cũ...`, '#e11d48');
+                        safeClick(deleteBtn);
+                        return;
+                    }
+
+                    const chevronBtn = rowContainer.querySelector('.ms-Icon--ChevronRight, [class*="ChevronRight"]');
+                    if (chevronBtn) {
+                        setDebug(`🔓 Click dấu mũi tên để mở rộng email cũ...`, '#0284c7');
+                        safeClick(chevronBtn);
+                        return;
+                    }
+                }
+            }
+        }
+
+        if (hasNewRecoveryOnPage && !hasOldRecoveryOnPage) {
+            const changePassBtn = document.getElementById('ChangePassword');
+            if (changePassBtn && changePassBtn.offsetWidth > 0) {
+                setDebug(`🔑 Click chọn [Thay đổi mật khẩu]...`, '#e11d48');
+                safeClick(changePassBtn);
+                return;
+            }
+
+            const passwordLink = Array.from(document.querySelectorAll('span.pullout-link-text, a, button, div')).find(el => {
+                const txt = (el.textContent || '').trim().toLowerCase();
+                return txt === 'nhập mật khẩu' || txt === 'mật khẩu' || txt === 'password' || txt.includes('nhập mật khẩu') || txt.includes('thay đổi mật khẩu');
+            });
+
+            if (passwordLink) {
+                let parent = passwordLink.parentElement;
+                let rowContainer = null;
+                for (let depth = 0; depth < 5 && parent; depth++) {
+                    if (parent.classList.contains('box') || parent.classList.contains('pullout') || parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button' || parent.classList.contains('ms-Grid-col')) {
+                        rowContainer = parent;
+                        break;
+                    }
+                    parent = parent.parentElement;
+                }
+
+                if (rowContainer) {
+                    const chevronBtn = rowContainer.querySelector('.ms-Icon--ChevronRight, [class*="ChevronRight"]');
+                    if (chevronBtn) {
+                        setDebug(`🔓 Click dấu mũi tên để mở rộng mục Mật khẩu...`, '#0284c7');
+                        safeClick(chevronBtn);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    function handleAccountOtp(acc, singleInput) {
+        const lastErrorTime = Number(sessionStorage.getItem("last_otp_error_time") || 0);
+        const secondsPassed = (Date.now() - lastErrorTime) / 1000;
+        if (secondsPassed < 35) {
+            const waitSeconds = Math.ceil(35 - secondsPassed);
+            setDebug(`⏳ Phát hiện nhập sai mã. Tạm ngưng ${waitSeconds}s để chờ mã mới...`, '#d97706');
+            return;
+        }
+
+        const pageText = (document.body.innerText || '').toLowerCase();
+        let targetOtpEmail = acc.oldRecovery;
+
+        if (acc.newRecovery) {
+            const newRecLower = acc.newRecovery.toLowerCase();
+            const newPrefix = newRecLower.substring(0, 3);
+            const newDomain = newRecLower.split('@')[1] || '';
+            if (pageText.includes(newPrefix) && pageText.includes(newDomain)) {
+                targetOtpEmail = acc.newRecovery;
+            }
+        }
+
+        if (targetOtpEmail !== acc.newRecovery && acc.oldRecovery) {
+            const oldRecLower = acc.oldRecovery.toLowerCase();
+            const oldPrefix = oldRecLower.substring(0, 3);
+            const oldDomain = oldRecLower.split('@')[1] || '';
+            if (pageText.includes(oldPrefix) && pageText.includes(oldDomain)) {
+                targetOtpEmail = acc.oldRecovery;
+            }
+        }
+
+        setDebug(`⏳ Đang chờ OTP từ: ${targetOtpEmail}...`, '#d97706');
+        makeRequest(`${API_OTP_BRIDGE}?email=${encodeURIComponent(targetOtpEmail || '')}`, "GET", null, function(err, responseText) {
+            if (err) return;
+            try {
+                const data = JSON.parse(responseText);
+                if (data.success && data.otp) {
+                    if (singleInput.value !== data.otp) {
+                        setDebug(`🔐 Điền OTP đơn lẻ: ${data.otp}`, '#16a34a');
+                        safeFill(singleInput, data.otp);
+                        setTimeout(() => {
+                            const verifyBtn = document.querySelector('input[type="submit"], button[type="submit"], #idSIButton9, #submitBtn, #submitButton');
+                            if (verifyBtn) {
+                                safeClick(verifyBtn);
+                            }
+                        }, 500);
+                    }
+                }
+            } catch (e) {
+                console.error('Lỗi parse OTP:', e);
+            }
+        });
+    }
+})();

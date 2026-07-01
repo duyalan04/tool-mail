@@ -5,11 +5,11 @@ export const maxDuration = 30;
 
 export async function POST(request: NextRequest) {
   try {
-    const { sheetId, sheetName = 'Sheet1', rowIndex, errorMsg = 'LỖI MẬT KHẨU' } = await request.json();
+    const { sheetId } = await request.json();
 
-    if (!sheetId || !rowIndex) {
+    if (!sheetId) {
       return NextResponse.json(
-        { success: false, error: 'Thiếu tham số: sheetId hoặc rowIndex' },
+        { success: false, error: 'Thiếu sheetId' },
         { status: 400 }
       );
     }
@@ -27,23 +27,24 @@ export async function POST(request: NextRequest) {
     const auth = new google.auth.JWT({
       email: clientEmail,
       key: privateKey,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
     });
 
     const sheets = google.sheets({ version: 'v4', auth });
 
-    // Cột H là cột lưu trạng thái / lỗi
-    await sheets.spreadsheets.values.update({
+    const response = await sheets.spreadsheets.get({
       spreadsheetId: sheetId,
-      range: `${sheetName}!H${rowIndex}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [[errorMsg]] },
+      fields: 'sheets/properties/title',
     });
 
-    return NextResponse.json({ success: true, rowIndex, errorMsg });
+    const sheetNames = (response.data.sheets ?? [])
+      .map((s) => s.properties?.title)
+      .filter((title): title is string => typeof title === 'string');
+
+    return NextResponse.json({ success: true, sheetNames });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error('[error-row] error:', err);
+    console.error('[get-sheets] error:', err);
     return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }

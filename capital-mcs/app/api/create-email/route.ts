@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
-import axios from 'axios';
 
 export const maxDuration = 30;
 
@@ -27,13 +26,13 @@ const INBOXES_DOMAINS = [
   'fivermail.com', 'getairmail.com', 'getmule.com', 'getnada.com',
   'gimpmail.com', 'givmail.com', 'guysmail.com', 'inboxbear.com',
   'replyloop.com', 'robot-mail.com', 'tafmail.com', 'temptami.com',
-  'tupmail.com', 'vomoto.com'
+  'tupmail.com', 'vomoto.com', 'smvmail.com'
 ];
 
 async function pickDomain(preferred?: string, provider?: string): Promise<string> {
   const allDomains = [...FVIA_DOMAINS, ...INBOXES_DOMAINS];
 
-  if (preferred && preferred !== 'random' && allDomains.includes(preferred)) {
+  if (preferred && preferred !== 'random' && preferred !== 'Ngẫu nhiên (Tự động)' && allDomains.includes(preferred)) {
     return preferred;
   }
 
@@ -60,24 +59,9 @@ export async function POST(request: NextRequest) {
     }
 
     const domain = await pickDomain(preferredDomain, provider);
-    const email = `${name}@${domain}`.toLowerCase();
-    
-    if (INBOXES_DOMAINS.includes(domain)) {
-      try {
-        const initUrl = `https://inboxes.com/api/v2/inbox/${encodeURIComponent(email)}`;
-        await axios.get(initUrl, {
-          headers: {
-            'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-          },
-          validateStatus: () => true // ignore errors, just ping
-        });
-        console.log(`[create-email] Initialized inboxes.com mailbox: ${email}`);
-      } catch (pingErr) {
-        console.error(`[create-email] Failed to ping inboxes.com for ${email}:`, pingErr);
-      }
-    }
-
+    // fviainboxes.com là hệ thống catch-all, không cần gọi API tạo email.
+    // Chỉ cần bịa ra username kết hợp với domain là thành email có thể nhận thư.
+    const email = `${name}@${domain}`;
     const token = ''; // Không cần token bảo mật nữa
 
     // Nếu có thông tin sheet thì ghi email vào cột E

@@ -9,10 +9,13 @@ export type SheetRow = {
   email: string;
   password: string;
   recovery: string;
+  oldRecovery?: string;
+  newPassword?: string;
+  newMkCapital?: string;
   mkCapital: string;
   code: string;
-  status?: string;
   isDone: boolean;
+  isPasswordError?: boolean;
 };
 
 export function extractSheetId(url: string): string {
@@ -20,15 +23,26 @@ export function extractSheetId(url: string): string {
   return m ? m[1] : url.trim();
 }
 
-export function useSheet(initialSheetId: string, sheetName = 'Sheet1') {
+export function useSheet(initialSheetId: string, initialSheetName = 'Sheet1', initialMode: 'default' | 'capital' = 'default') {
   const [sheetId, setSheetId] = useState(initialSheetId);
+  const [sheetName, setSheetName] = useState(initialSheetName);
+  const [mode, setMode] = useState<'default' | 'capital'>(initialMode);
   const [rows, setRows] = useState<SheetRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isReady, setIsReady] = useState(false);
+
+  // Khởi tạo thông tin từ localStorage sau khi component mounted để tránh hydration mismatch
+  useEffect(() => {
+    const savedId = localStorage.getItem('sheetId');
+    const savedName = localStorage.getItem('sheetName');
+    if (savedId) setSheetId(savedId);
+    if (savedName) setSheetName(savedName);
+    setIsReady(true);
+  }, []);
 
   const fetchRows = useCallback(async () => {
-    if (!sheetId) {
-      setError('Vui lòng nhập sheetId');
+    if (!isReady || !sheetId) {
       return;
     }
     setLoading(true);
@@ -37,11 +51,11 @@ export function useSheet(initialSheetId: string, sheetName = 'Sheet1') {
       const res = await fetch('/api/read-rows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sheetId, sheetName }),
+        body: JSON.stringify({ sheetId, sheetName, mode }),
       });
       const data = await res.json();
       if (!data.success) {
-        setError(data.error || 'Không đọc được sheet');
+        setError(data.error || 'Không đọc được sheet (Vui lòng kiểm tra lại Tên Trang Tính)');
         setRows([]);
       } else {
         setRows(data.rows ?? []);
@@ -51,11 +65,11 @@ export function useSheet(initialSheetId: string, sheetName = 'Sheet1') {
     } finally {
       setLoading(false);
     }
-  }, [sheetId, sheetName]);
+  }, [sheetId, sheetName, mode, isReady]);
 
   useEffect(() => {
-    if (sheetId) void fetchRows();
-  }, [sheetId, fetchRows]);
+    if (isReady && sheetId) void fetchRows();
+  }, [isReady, sheetId, fetchRows]);
 
   const patchRow = useCallback((rowIndex: number, patch: Partial<SheetRow>) => {
     setRows(prev =>
@@ -63,5 +77,5 @@ export function useSheet(initialSheetId: string, sheetName = 'Sheet1') {
     );
   }, []);
 
-  return { sheetId, setSheetId, rows, loading, error, fetchRows, patchRow };
+  return { sheetId, setSheetId, sheetName, setSheetName, mode, setMode, rows, loading, error, fetchRows, patchRow };
 }

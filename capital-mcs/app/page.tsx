@@ -7,14 +7,13 @@ import { FilterBar } from './components/FilterBar';
 import { RowCard } from './components/RowCard';
 
 const DEFAULT_SHEET_ID = '1AB2LGfQqGP5es9nU2vMuwldI1HabyV1pyrVOhOC4GRE';
-const SHEET_NAME = 'Sheet1';
+const DEFAULT_SHEET_NAME = 'Sheet1';
 const WEB_MAIL_KP_URL = 'https://login.live.com/login.srf?wa=wsignin1.0&rpsnv=198&ct=1782607399&rver=7.5.2211.0&wp=SA_20MIN&wreply=https%3A%2F%2Faccount.live.com%2Fproofs%2FManage%2Fadditional%3Fuaid%3D233239318fd1447bab2b4edd22546006&lc=1033&id=38936&mkt=vi-VN&uaid=233239318fd1447bab2b4edd22546006';
 
 export default function Home() {
-  const [pendingSheetId, setPendingSheetId] = useState(DEFAULT_SHEET_ID);
-  const { sheetId, setSheetId, rows, loading, error, fetchRows, patchRow
+  const { sheetId, setSheetId, sheetName, setSheetName, mode, setMode, rows, loading, error, fetchRows, patchRow
   } =
-    useSheet(pendingSheetId, SHEET_NAME);
+    useSheet(DEFAULT_SHEET_ID, DEFAULT_SHEET_NAME, 'default');
 
   const [showForm, setShowForm] = useState(false);
 
@@ -23,7 +22,7 @@ export default function Home() {
   const [fviaError, setFviaError] = useState('');
   const [iframeKey, setIframeKey] = useState(0);
   const [mailProvider, setMailProvider] = useState<'inboxes' | 'fvia'>('inboxes');
-  const [preferredDomain, setPreferredDomain] = useState('fivermail.com');
+  const [preferredDomain, setPreferredDomain] = useState('random');
 
   // Lắng nghe token từ iframe gửi lên
   useEffect(() => {
@@ -65,12 +64,6 @@ export default function Home() {
     'not-done'>('all');
   const [searchText, setSearchText] = useState('');
 
-  useEffect(() => {
-    if (pendingSheetId && pendingSheetId !== sheetId) {
-      setSheetId(pendingSheetId);
-    }
-  }, [pendingSheetId, sheetId, setSheetId]);
-
   const uniqueNames = useMemo(() => {
     const set = new Set<string>();
     rows.forEach(r => { if (r.name) set.add(r.name); });
@@ -78,32 +71,69 @@ export default function Home() {
   }, [rows]);
 
   const filtered = useMemo(() => {
-    if (!selectedName) return [];
     const result = rows.filter(r => {
-      if (selectedName !== 'all' && r.name !== selectedName) return false;
+      if (mode !== 'capital' && selectedName && selectedName !== 'all' && r.name !== selectedName) return false;
       if (statusFilter === 'done' && !r.isDone) return false;
       if (statusFilter === 'not-done' && r.isDone) return false;
       if (searchText) {
         const q = searchText.toLowerCase();
         const hay = (r.name + ' ' + r.email + ' ' +
-          r.recovery).toLowerCase();
+          (r.recovery || '') + ' ' + (r.oldRecovery || '')).toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
 
     result.sort((a, b) => {
-      if (a.isDone === b.isDone) {
+      const aAtEnd = a.isDone || a.isPasswordError;
+      const bAtEnd = b.isDone || b.isPasswordError;
+      
+      if (aAtEnd === bAtEnd) {
         return a.rowIndex - b.rowIndex;
       }
-      return a.isDone ? 1 : -1;
+      return aAtEnd ? 1 : -1;
     });
 
     return result;
-  }, [rows, selectedName, statusFilter, searchText]);
+  }, [rows, selectedName, statusFilter, searchText, mode]);
 
   const doneCount = filtered.filter(r => r.isDone).length;
   const notDoneCount = filtered.length - doneCount;
+
+  // Phân trang gọn gàng (Pagination)
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(6);
+  const [activeEmail, setActiveEmail] = useState('');
+  
+  // Tự động kiểm tra nếu Backend đã xóa tài khoản (VD: Tampermonkey báo lỗi)
+  useEffect(() => {
+    if (!activeEmail) return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch('/api/current-account');
+        const data = await res.json();
+        // Nếu API trả về success nhưng account là null => tài khoản đã bị xóa khỏi trạng thái Đang chạy
+        if (data.success && !data.account) {
+          setActiveEmail('');
+          fetchRows();
+        }
+      } catch (e) {
+        console.error('Lỗi poll current-account:', e);
+      }
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [activeEmail, fetchRows]);
+  // Reset trang về 1 khi các bộ lọc thay đổi
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [mode, selectedName, statusFilter, searchText, pageSize]);
+
+  const totalPages = Math.ceil(filtered.length / pageSize) || 1;
+
+  const paginatedRows = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, currentPage, pageSize]);
 
   return (
     <div className="min-h-screen bg-gray-100 p-6">
@@ -112,10 +142,27 @@ export default function Home() {
         {!showForm && (
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
             <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
-              {/* Provider Toggle */}
-              <div className="flex bg-gray-100 p-1 rounded-lg">
+              
+              {/* Mode Toggle */}
+              <div className="flex bg-gray-200 p-1 rounded-lg mr-2">
                 <button
-                  onClick={() => { setMailProvider('inboxes'); setPreferredDomain('fivermail.com'); }}
+                  onClick={() => { setMode('default'); setSelectedName(''); }}
+                  className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'default' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  Mặc định
+                </button>
+                <button
+                  onClick={() => { setMode('capital'); setSelectedName('Capital'); }}
+                  className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'capital' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  Capital One
+                </button>
+              </div>
+
+              {/* Provider Toggle */}
+              <div className="flex bg-gray-200 p-1 rounded-lg">
+                <button
+                  onClick={() => { setMailProvider('inboxes'); setPreferredDomain('random'); }}
                   className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mailProvider === 'inboxes' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
                 >
                   Inboxes.com
@@ -157,9 +204,10 @@ export default function Home() {
                       <option value="temptami.com">@temptami.com</option>
                       <option value="tupmail.com">@tupmail.com</option>
                       <option value="vomoto.com">@vomoto.com</option>
+                      <option value="smvmail.com">@smvmail.com</option>
                     </optgroup>
                   ) : (
-                    <optgroup label="Fviainboxes">
+                    <optgroup label="Fvia">
                       <option value="fviainboxes.com">@fviainboxes.com</option>
                       <option value="fviadropinbox.com">@fviadropinbox.com</option>
                       <option value="fviamail.work">@fviamail.work</option>
@@ -213,7 +261,7 @@ export default function Home() {
               onClick={() => setShowForm(true)}
               className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm font-medium whitespace-nowrap"
             >
-              ⚙️ Đổi link Google Sheet
+              ⚙️ Cấu hình Google Sheet
             </button>
           </div>
         )}
@@ -232,8 +280,12 @@ export default function Home() {
             )}
             <SheetForm
               currentSheetId={sheetId}
-              onSubmit={(id) => {
-                setPendingSheetId(id);
+              currentSheetName={sheetName}
+              onSubmit={(id, name) => {
+                setSheetId(id);
+                setSheetName(name);
+                localStorage.setItem('sheetId', id);
+                localStorage.setItem('sheetName', name);
                 setShowForm(false);
               }}
             />
@@ -247,7 +299,7 @@ export default function Home() {
           </div>
         )}
 
-        {rows.length > 0 && (
+        {rows.length > 0 && mode !== 'capital' && (
           <FilterBar
             uniqueNames={uniqueNames}
             selectedName={selectedName}
@@ -261,6 +313,44 @@ export default function Home() {
             onChangeStatus={setStatusFilter}
             onChangeSearch={setSearchText}
           />
+        )}
+
+        {rows.length > 0 && mode === 'capital' && (
+          <div className="bg-white rounded-lg shadow p-6 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">📌 Trạng thái:</label>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as 'all' | 'done' | 'not-done')}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                >
+                  <option value="all">Tất cả</option>
+                  <option value="not-done">⏳ Đang làm</option>
+                  <option value="done">✅ Đã làm</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">🔎 Tìm kiếm:</label>
+                <input
+                  type="text"
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                  placeholder="Tìm theo Hotmail, mail khôi phục..."
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                />
+              </div>
+              <div className="flex items-end">
+                <div className="bg-gradient-to-r from-blue-50 to-purple-50 px-4 py-2 rounded-lg w-full text-sm">
+                  <div>📋 Hiển thị: <b>{filtered.length}</b> / {rows.length}</div>
+                  <div>
+                    ✅ <b className="text-green-600">{doneCount}</b>{' '}
+                    ⏳ <b className="text-orange-600">{notDoneCount}</b>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         {rows.length > 0 && (
@@ -284,7 +374,7 @@ export default function Home() {
           </div>
         )}
 
-        {rows.length > 0 && selectedName === '' && (
+        {rows.length > 0 && selectedName === '' && mode !== 'capital' && (
           <div className="text-center text-gray-500 py-12 bg-white rounded-lg shadow border-2 border-dashed border-gray-300 mb-6">
             <span className="text-2xl mb-2 block">👆</span>
             Vui lòng chọn người ở mục <strong>"Lọc theo người"</strong> bên trên để hiển thị danh sách tài khoản.
@@ -292,32 +382,102 @@ export default function Home() {
         )}
 
         {loading && rows.length === 0 && (
-          <div className="text-center text-gray-500 py-12">⏳ Đang tải dữ
-            liệu...</div>
+          <div className="text-center text-gray-500 py-12">⏳ Đang tải dữ liệu...</div>
         )}
 
         {!loading && sheetId && rows.length === 0 && !error && (
-          <div className="text-center text-gray-500 py-12">Sheet trống
-            hoặc chưa có dữ liệu.</div>
+          <div className="text-center text-gray-500 py-12">Sheet trống hoặc chưa có dữ liệu.</div>
         )}
 
-        {filtered.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 
-  gap-4">
-            {filtered.map((row, idx) => (
-              <RowCard
-                key={row.rowIndex}
-                row={row}
-                index={idx}
-                sheetId={sheetId}
-                sheetName={SHEET_NAME}
-                onUpdated={patchRow}
-                fviaToken={fviaToken}
-                preferredDomain={preferredDomain}
-                mailProvider={mailProvider}
-              />
-            ))}
-          </div>
+        {paginatedRows.length > 0 && (
+          <>
+            {/* Page Size Selector & Pagination Summary */}
+            <div className="flex flex-col sm:flex-row justify-between items-center mb-4 mt-6 gap-3 bg-white p-4 rounded-lg shadow-sm border">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-700">📄 Hiển thị mỗi trang:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(parseInt(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="px-3 py-1.5 border rounded-lg text-sm bg-gray-50 font-medium text-gray-700 cursor-pointer"
+                >
+                  <option value="3">3 tài khoản</option>
+                  <option value="4">4 tài khoản</option>
+                  <option value="5">5 tài khoản</option>
+                  <option value="6">6 tài khoản</option>
+                </select>
+              </div>
+              <div className="text-sm text-gray-500 font-medium">
+                Hiển thị tài khoản <b>{Math.min(filtered.length, (currentPage - 1) * pageSize + 1)}</b> - <b>{Math.min(filtered.length, currentPage * pageSize)}</b> trong tổng số <b>{filtered.length}</b>
+              </div>
+            </div>
+
+            {/* Grid hiển thị danh sách RowCard */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {paginatedRows.map((row, idx) => (
+                <RowCard
+                  key={row.rowIndex}
+                  row={row}
+                  index={idx}
+                  sheetId={sheetId}
+                  sheetName={sheetName}
+                  onUpdated={patchRow}
+                  fviaToken={fviaToken}
+                  preferredDomain={preferredDomain}
+                  mailProvider={mailProvider}
+                  mode={mode}
+                  activeEmail={activeEmail}
+                  onActive={setActiveEmail}
+                />
+              ))}
+            </div>
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex justify-center items-center gap-2 mt-8 mb-6">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                  className="px-4 py-2 bg-white text-gray-700 rounded-lg border hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 transition-colors text-sm font-medium"
+                >
+                  ◀ Trước
+                </button>
+                
+                {/* Hiển thị số trang */}
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => {
+                  if (page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1) {
+                    return (
+                      <button
+                        key={page}
+                        onClick={() => setCurrentPage(page)}
+                        className={`w-10 h-10 rounded-lg text-sm font-semibold transition-colors ${
+                          currentPage === page
+                            ? 'bg-blue-600 text-white shadow-md'
+                            : 'bg-white text-gray-700 border hover:bg-gray-50'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    );
+                  }
+                  if (page === 2 || page === totalPages - 1) {
+                    return <span key={page} className="text-gray-400">...</span>;
+                  }
+                  return null;
+                })}
+
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                  className="px-4 py-2 bg-white text-gray-700 rounded-lg border hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 transition-colors text-sm font-medium"
+                >
+                  Sau ▶
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
