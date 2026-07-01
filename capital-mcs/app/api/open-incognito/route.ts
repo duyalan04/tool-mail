@@ -14,7 +14,7 @@ export async function OPTIONS() {
 }
 
 // Hàm tìm đường dẫn thực thi của Google Chrome trên Windows
-function getChromePath(): string {
+function getChromePath(): string | null {
   const paths = [
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
@@ -26,7 +26,7 @@ function getChromePath(): string {
       return p;
     }
   }
-  return 'chrome'; // Fallback nếu không tìm thấy trong các đường dẫn mặc định
+  return null; // Trả về null nếu không tìm thấy (ví dụ khi chạy trên Vercel)
 }
 
 export async function POST(request: NextRequest) {
@@ -37,6 +37,9 @@ export async function POST(request: NextRequest) {
     }
 
     const chromePath = getChromePath();
+    if (!chromePath) {
+      return NextResponse.json({ success: false, error: 'Không tìm thấy Chrome. Chức năng mở tab ẩn danh chỉ hoạt động khi chạy localhost trên máy tính cá nhân.' }, { status: 400, headers: corsHeaders });
+    }
     
     // Sử dụng spawn để truyền các đối số (args) dưới dạng mảng
     const args = ['--incognito', '--new-window'];
